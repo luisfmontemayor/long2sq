@@ -1,0 +1,437 @@
+#!/usr/bin/env Rscript
+#Code originally written by James Littlefair.
+#Adapted by Luis Felipe Montemayor, sometime in October of 2022.
+#https://open.spotify.com/track/4gUUfLOH38XYU5Q3b2K4Go?si=17aa1469e0a6412b
+
+options(scipen = 999)
+#options(error=recover)
+
+usage<-function(){
+message("Usage: 
+
+	plink2matrix <plink-4-column-output-file>
+
+
+Will make a symmetrical distance matrix when given plink output, \
+normalized for the kin0 plink values.
+")
+}
+
+file_loader <- function(arguments){
+  if(file.exists(arguments[1])){
+    INPUTSOURCE<<-as.character(arguments[1])
+  }else{
+    cat(paste(arguments[1], " is not a file... Exiting.\n", sep=""))
+    quit(save="no", status=1)
+  }
+}
+
+
+args <- commandArgs(trailingOnly = TRUE)
+
+if(sum(c("-h", "--help") %in% args[1])>=1){
+  usage()
+  quit(save="no", status=0)
+}
+
+if(length(args)==1){
+  file_loader(arguments=args)
+	
+}else if( length(args)<1 ){
+  cat("You have to give me some arguments...\n")
+  usage()
+  quit(save="no", status=1)
+
+}else if( length(args)>2 ){
+  cat("You gave me too many arguments...\n")
+  usage()
+  quit(save="no", status=1)
+}
+
+
+tsv_writer<-function(matrix_to_save, name){
+	write.table(matrix_to_save, 
+				file = as.character(name), 
+				quote = F, 
+				sep="\t", 
+				row.names = TRUE, 
+				col.names = NA)
+}
+
+phylip_writer<-function(matrix_to_save, name){
+	
+	writeLines(as.character(sample_names_length),
+			   con = as.character(name))
+	
+	write.table(matrix_to_save,
+				file = as.character(name),
+				quote = FALSE,
+				sep="\t",
+				row.names = TRUE,
+				col.names = FALSE,
+				append = TRUE)
+}
+
+
+debugging_report_saver <- function(matrices, test_failed){
+	a<-1
+	}
+# 
+# 	write(paste("\n",
+# 		  "~~~~~~~~~~~~~~~~~~~~~~~~\n",
+# 		  "~~~ Debugging report ~~~", "\n\n",
+# 		  "Test failed: ", as.character(test_failed), "\n",
+# 		  "Plink table that I exited on: ", substitute(comparison_table), "\n\n",
+# 		  "~~Variable Values:", "\n",
+# 		  "sample_name_length: ", sample_names_length, "\n",
+# 		  "missing_row: ", missing_row, "\n",
+# 		  "missing_col: ", missing_col, "\n\n",
+# 		  file=stderr()
+# 		)
+# 		)
+# 
+# 	if( exists( "triangular_matrix_reordering" ) ){
+# 		write(paste(matrix_name, "The `triangular_matrix` HAS been rearranged", "\n"), 
+# 			  file=stderr(), 
+# 			  append=TRUE
+# 		)
+# 	}
+# 	
+# 	write("\n~~Matrix details:\n",
+# 		  file=stderr()
+# 		  )
+# 		  
+# 	
+# 	for( matrix in matrices ){
+# 		
+# 		print(matrix)
+# 		
+# 		matrix_name <- print(matrix)
+# 		
+# 		write(paste("~ ", print(matrix_name), "\n",
+# 					"sample_names not in rownames:", sample_names[! sample_names %in% rownames(matrix)], "\n", 
+# 					"sample_names not in colnames:", sample_names[! sample_names %in% colnames(matrix)], "\n", 
+# 					"dims:", dim(matrix), "\n",
+# 					"Number of non-zero values in diagonal:", sum(is.infinite(matrix)), "\n",
+# 					"Number of Inf values in:", sum(is.infinite(matrix)), "\n",
+# 					"Number of NA values in:", sum(is.na(matrix)), "\n",
+# 					"Number of NaN values in:", sum(is.nan(matrix)), "\n",
+# 					"\n"),
+# 			  file=stderr(),
+# 			  append=TRUE
+# 			  )
+# 		}
+# 
+# }
+
+matrix_cast <- function(comparison_table, sample_names){
+  ## Turning input into an incomplete pairwise comparison matrix 
+	preprocess_trianglematrix<-as.matrix(
+    as.data.frame.matrix(
+      xtabs(V3 ~ V1 + V2,
+            data=comparison_table
+            )
+      )
+  )
+
+  # Checking if the input dataset has more non-zero values than expected for a triangular matrix
+  if(sum(preprocess_trianglematrix > 0) > sum(lower.tri(preprocess_trianglematrix, diag=TRUE))){
+    write("The input dataset has more non-zero values than expected. Exiting before processing.\n", stderr());
+    quit(save="no", status=1)
+  }
+  
+  ## Determining what sample names are missing from these matrices: Plink leaves some out
+  missing_row <<- as.character(sample_names[!(sample_names %in% rownames(preprocess_trianglematrix))])
+  missing_col <<- as.character(sample_names[!(sample_names %in% colnames(preprocess_trianglematrix))])
+  
+  overlapping_sample_names <- rownames(preprocess_trianglematrix)[rownames(preprocess_trianglematrix)%in%colnames(preprocess_trianglematrix)]
+  
+
+  # Trying to catch weirdness: Plink should skip two samples naturally. This ensures that's the case
+  if( length(missing_row)>1 
+	|| length(missing_col)>1 ){
+    write("I am expeting one missing sample in the rownames or colnames, your input has more than one for one of them.\n", stderr())
+    
+	  write("Writing a debugging report...\n", stderr())
+	  debugging_report_saver(matrices=c("preprocess_trianglematrix"),
+						failed_test="length(missing_row)>1 || length(missing_col)>1")
+	
+    write("Saving intermediate matrix for debugging...\n", stderr())
+	
+	  tsv_writer(matrix_to_save = preprocess_trianglematrix,
+			   name = paste(substitute(comparison_table),
+				 "_preprocess_trianglematrix.failedvariable.tsv",
+				 sep=""))
+  
+	  write("Exiting...\n", stderr())
+    quit(save="no", status=1)
+  }
+  
+  
+  ## Reordering row names and column names. This step assumes that:
+  # >The sample missing from the column names has the row with most non-zero values.
+  # >The sample missing from the row names has the column with most zero values.
+  ## It will output a triangular matrix, where:
+  # >A column name is missing from the row names
+  # >A row name is missing from the column names
+  preprocess_trianglematrix <- preprocess_trianglematrix[
+    c(overlapping_sample_names, missing_col),
+    c(missing_row, overlapping_sample_names)
+  ]
+  
+  ## Ensuring a triangular matrix format (can be triangular but unorganized)
+  if(sum(preprocess_trianglematrix[upper.tri(preprocess_trianglematrix, diag=FALSE)])>0 
+    && sum(diag(preprocess_trianglematrix)>0)!=0 ){
+    
+    # A variable for later debug report
+    triangular_matrix_reordering <- TRUE
+    
+    # Reorganizes triangular matrix of the overlapping set of sample names
+    overlapping_sample_matrix <- preprocess_trianglematrix[overlapping_sample_names, overlapping_sample_names]
+
+    overlapping_sample_matrix <- ( t(overlapping_sample_matrix) + overlapping_sample_matrix ) * ( lower.tri(overlapping_sample_matrix, diag = FALSE) + 0 )
+    
+    preprocess_trianglematrix[overlapping_sample_names, overlapping_sample_names] <- overlapping_sample_matrix
+
+    triangle_matrix <- preprocess_trianglematrix
+    
+  }else{
+    
+    # In case that it is ordered as a triangular matrix
+    triangle_matrix <- preprocess_trianglematrix
+    
+    # Making sure it includes the missing names
+    triangle_matrix <- rbind( rep(0,dim(triangle_matrix)[2]), triangle_matrix )
+    rownames(triangle_matrix)[1] <- as.character(missing_row)
+    
+    triangle_matrix <- cbind( triangle_matrix, rep(0,dim(triangle_matrix)[1]))
+    colnames(triangle_matrix)[dim(triangle_matrix)[1]] <- as.character(missing_col)
+    
+  }
+  
+
+  ## Ensuring that:
+	#the matrix is a lower triangular matrix
+    #is missing row/col names (expected)
+	#that it's offset by 1 (no diagonal)
+  if( (length(missing_row)==1 
+  	 || length(missing_col)==1 ) 
+  	&& sum(diag(triangle_matrix)>0)!=0 ){
+
+    triangle_matrix<-rbind(rep(0,dim(triangle_matrix)[2]),triangle_matrix)
+    rownames(triangle_matrix)[1]<-missing_row
+  
+    triangle_matrix<-cbind(triangle_matrix,rep(0,dim(triangle_matrix)[1]))
+    colnames(triangle_matrix)[dim(triangle_matrix)[2]]<-missing_col
+  
+    
+  # Unexpected, but benign:
+    # It is a lower triangular matrix, but has a diagonal sum of 0 
+	# Is not missing col/row names 
+  }else if( (length(missing_row)==0 
+  		   || length(missing_col)==0 ) 
+  		  && sum(diag(triangle_matrix)>0)==0 ){
+
+    break
+ 
+  # Unexpected and erroneous:
+  	# There are missing col/row names (expected), 
+  	# But the triangular matrix has a diagonal sum of 0
+	# And has a diagonal sum != 0
+#   }else if( 
+# 			(length(missing_row)>0 || length(missing_col)>0 ) 
+# 			&& ( sum(diag(triangle_matrix)>0)==0 )
+# 			&& ( sum(diag(triangle_matrix[,-1])>0)!=0 )
+# 		   ){
+#     
+#     #Trying to catch any unexpected cases of weird Plink output
+#     write("The `triangle_matrix` variable is missing the colnames/rownames as expected, but...
+# 	>It's diagonal sum == 0.
+# 	>It's superdiagonal sum !=0
+# 
+# This is an accounted for edge-case: Exiting.\n", stderr())
+# 
+#   	debugging_report_saver(matrices=c("preprocess_trianglematrix",
+#   									   "triangle_matrix"),
+#   							test_failed="(
+# 	length(missing_row)>0 
+#   	|| length(missing_col)>0 
+# ) && ( sum(diag(triangle_matrix)>0)==0 ) 
+# && ( sum(diag(triangle_matrix[,-1])>0)!=0 )")
+# 
+#     write("Saving intermediate matrices for debugging...\n", stderr())
+#     tsv_writer(matrix_to_save = preprocess_trianglematrix,
+#     		   name = paste(substitute(comparison_table), 
+#     		   			 "_preprocess_trianglematrix.failedvariable.tsv", 
+#     		   			 sep=""))
+#     tsv_writer(matrix_to_save = triangle_matrix,
+#     		   name = paste(substitute(comparison_table), 
+#     		   			 "_triangle_matrix.failedvariable.tsv", 
+#     		   			 sep=""))
+#     
+#     quit(save="no", status=1)
+#   
+  }
+
+  if( sum(rownames(triangle_matrix)!=colnames(triangle_matrix) )>0){
+    
+  	write("Rownames and colnames of `triangle_matrix` variable are not in the same order, contact Luis.\n", stderr())
+  	debugging_report_saver(matrices=c("preprocess_trianglematrix",
+  									   "triangle_matrix"),
+  							test_failed="sum(rownames(triangle_matrix)!=colnames(triangle_matrix))>0")
+  	
+  	write("Saving intermediate matrices for debugging...\n", stderr())
+  	tsv_writer(matrix_to_save = preprocess_trianglematrix,
+  			   name = paste(substitute(comparison_table), 
+  			   			 "_preprocess_trianglematrix.failedvariable.tsv", 
+  			   			 sep=""))
+  	tsv_writer(matrix_to_save = triangle_matrix,
+  			   name = paste(substitute(comparison_table), 
+  			   			 "_triangle_matrix.failedvariable.tsv", 
+  			   			 sep=""))
+  	
+    quit(save="no", status=1)
+  }
+  
+  ## Making symmetrical matrix from lower triangle matrix
+  finalmatrix <- t(triangle_matrix) + triangle_matrix
+  
+  # Returning matrix with predefined global sample order (always the same).
+  if(isSymmetric(finalmatrix) 
+     && sum(finalmatrix==Inf)==0 
+     && sum(diag(finalmatrix)>0)==0){
+    
+    finalmatrix[as.character(sample_names), as.character(sample_names)]
+  
+  }else{
+    
+    write("The final output matrix has some irregularities... Writing a debugging report.\n", stderr())
+      
+  	debugging_report_saver(matrices=c("preprocess_trianglematrix",
+  									   "triangle_matrix",
+  									   "finalmatrix"),
+  							test_failed="isSymmetric(finalmatrix) && sum(finalmatrix==Inf)==0 && sum(diag(finalmatrix)>0)==0")
+  	
+  	
+    write("Saving intermediate matrices for debugging...\n", stderr())
+    
+    tsv_writer(matrix_to_save = preprocess_trianglematrix,
+    		   name = paste(substitute(comparison_table), 
+    		   			 "_preprocess_trianglematrix.failedvariable.tsv", 
+    		   			 sep=""))
+   
+	tsv_writer(matrix_to_save = triangle_matrix,
+			   name = paste(substitute(comparison_table), 
+			   			 "_trianglematrix.failedvariable.tsv", 
+			   			 sep=""))
+	
+	tsv_writer(matrix_to_save = finalmatrix,
+			   name = paste(substitute(comparison_table), 
+			   			 "_finalmatrix.failedvariable.tsv", 
+			   			 sep=""))
+	
+	write("Exiting.\n", stderr())
+    quit(save="no", status = 1)
+  }
+}
+
+
+
+### Data Loading ---------------------------------------------------------------
+#INPUTSOURCE<-"jamesplink2.kin0"
+#setwd("//wsl.localhost/Ubuntu/home/lmontema/Scripts/test/plink2matrix/")
+
+kin0_sample_shared_sites <-  read.table(
+	file(paste(INPUTSOURCE)), 
+	sep = "\t", 
+	as.is=TRUE
+)[,c(1,2,3)]
+
+sdiff_pairwise_distances <- read.table(
+	file(paste(INPUTSOURCE)), 
+	sep = "\t", 
+	as.is=TRUE
+)[,c(1,2,4)]
+colnames(sdiff_pairwise_distances)<-c("V1","V2","V3")
+
+sample_names <- unique(
+	sort(
+		c(kin0_sample_shared_sites$V1,
+		  kin0_sample_shared_sites$V2,
+		  sdiff_pairwise_distances$V1,
+		  sdiff_pairwise_distances$V2
+		)
+	)
+)
+
+sample_names_length <- length(sample_names)
+
+
+
+### Body =======================================================================
+## Making the matrices from the Plink pairwise comparison tables
+write("Processing sdiff distances...\n", stderr())
+sdiff_matrix <- matrix_cast(comparison_table=sdiff_pairwise_distances, sample_names=sample_names)
+
+write("Processing kin0 distances...\n", stderr())
+kin0_sample_shared_sites_matrix <- matrix_cast(comparison_table=kin0_sample_shared_sites, sample_names=sample_names)
+
+
+## Normalizing the matrix
+write("Computing normalized distance matrix...\n", stderr())
+
+#Old Normalization: normalised_matrix <- (sdiff_matrix / kin0_sample_shared_sites_matrix) * mean(colSums(kin0_sample_shared_sites_matrix) / nrow(kin0_sample_shared_sites_matrix)) 
+
+normalised_matrix <- sdiff_matrix/( sdiff_matrix + kin0_sample_shared_sites_matrix ) 
+
+normalised_matrix[is.na(normalised_matrix)] <- 0
+normalised_matrix[is.nan(normalised_matrix)] <- 0
+
+
+
+
+### Outputting #################################################################
+#Making a numbering system for repeated file names in WD (to avoid overwritting)
+filenumber<-length(list.files(pattern = paste(INPUTSOURCE, "final_normalized_matrix.phylip",sep="")))
+
+if( filenumber > 0){
+  
+  SDIFFNAME <- paste(INPUTSOURCE, "_sdiff_matrix_", filenumber, sep="")
+  KIN0NAME <- paste(INPUTSOURCE, "_kin0_matrix_", filenumber, sep="")
+  OUTPUTFILENAME <- paste(INPUTSOURCE, "_final_normalized_matrix_", filenumber, sep="")
+  
+}else{
+  
+  SDIFFNAME <- paste(INPUTSOURCE, "_sdiff_matrix", sep="")
+  KIN0NAME <- paste(INPUTSOURCE, "_kin0_matrix", sep="")
+  OUTPUTFILENAME <- paste(INPUTSOURCE, "_final_normalized_matrix", sep="")
+  
+}
+
+
+## SDIFF matrices
+phylip_writer(matrix_to_save = sdiff_matrix,
+			  name = paste(SDIFFNAME, ".phylip", sep=""))
+
+tsv_writer(matrix_to_save = sdiff_matrix,
+		   name = paste(SDIFFNAME, ".tsv", sep=""))
+
+
+#KIN0 matrices
+phylip_writer(matrix_to_save = kin0_sample_shared_sites_matrix,
+			  name = paste(KIN0NAME, ".phylip", sep=""))
+
+tsv_writer(matrix_to_save = kin0_sample_shared_sites_matrix,
+		   name = paste(KIN0NAME, ".tsv", sep=""))
+
+
+# Final normalized matrix
+phylip_writer(matrix_to_save = normalised_matrix,
+		   name = paste(OUTPUTFILENAME, ".phylip", sep=""))
+
+tsv_writer(matrix_to_save = normalised_matrix,
+		   name = paste(OUTPUTFILENAME, ".tsv", sep=""))
+
+
+write("Saved PHYLIPs and TSVs for the kin0, sdiff and normalized (final) matrices.\n", stderr())
+quit(save="no", status=0)
