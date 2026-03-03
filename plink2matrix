@@ -1,7 +1,6 @@
 #!/usr/bin/env Rscript
-#Code originally written by James Littlefair.
-#Adapted by Luis Felipe Montemayor, sometime in October of 2022.
-#https://open.spotify.com/track/4gUUfLOH38XYU5Q3b2K4Go?si=17aa1469e0a6412b
+# Adapted by Luis Felipe Montemayor, sometime in October of 2022.
+# https://open.spotify.com/track/4gUUfLOH38XYU5Q3b2K4Go?si=17aa1469e0a6412b
 
 options(scipen = 999)
 #options(error=recover)
